@@ -9,6 +9,8 @@ import org.apache.tika.parser.pdf.PDFParserConfig
 import org.apache.tika.parser.{AutoDetectParser, ParseContext, Parser}
 import org.apache.tika.sax.{BodyContentHandler, ToXMLContentHandler, WriteOutContentHandler}
 import org.apache.poi.util.IOUtils
+import org.apache.poi.openxml4j.opc.ZipPackage
+import org.apache.poi.openxml4j.util.{ZipInputStreamZipEntrySource, ZipSecureFile}
 
 import java.io.IOException
 import scala.xml.SAXException
@@ -18,7 +20,7 @@ object TikaExtractor {
   @throws[IOException]
   @throws[SAXException]
   @throws[TikaException]
-  def extract(stream: TikaInputStream, filename: String, writeLimit: Int = -1, timeout: Int = 120, byteArrayMaxOverride: Int = 300000000, enableXMLOutput: Boolean = false): TikaContent = {
+  def extract(stream: TikaInputStream, filename: String, writeLimit: Int = -1, timeout: Int = 120, byteArrayMaxOverride: Int = 300000000, enableXMLOutput: Boolean = true): TikaContent = {
 
     // Configure each parser if required
     val pdfConfig = new PDFParserConfig
@@ -43,10 +45,21 @@ object TikaExtractor {
     parseContext.set(classOf[OfficeParserConfig], officeConfig)
     parseContext.set(classOf[Parser], parser)
 
-    // Reset `IOUtils.BYTE_ARRAY_MAX_OVERRIDE` once text is parsed. Default is -1.
-    val configManager = new GenericConfigManager[Int](IOUtils.setByteArrayMaxOverride, -1, byteArrayMaxOverride)
+    val originalSize = -1
+    val originalThreshold = ZipInputStreamZipEntrySource.getThresholdBytesForTempFiles
+    val originalMinInflateRatio = ZipSecureFile.getMinInflateRatio
+    val originalUseTempFilePackageParts = false
 
-    try configManager {
+    // Reset `IOUtils.BYTE_ARRAY_MAX_OVERRIDE` once text is parsed. Default is -1.
+    val byteArrayMaxOverrideConfig = new GenericConfigManager[Int](IOUtils.setByteArrayMaxOverride, originalSize, byteArrayMaxOverride)
+    val zipInputStreamZipEntrySourceConfig = new GenericConfigManager[Int](ZipInputStreamZipEntrySource.setThresholdBytesForTempFiles, originalThreshold, 16384)
+    val zipSecureFileConfig = new GenericConfigManager[Double](ZipSecureFile.setMinInflateRatio, originalMinInflateRatio, 0)
+    val zipPackageSetUseTempFilePackageParts = new GenericConfigManager[Boolean](ZipPackage.setUseTempFilePackageParts, originalUseTempFilePackageParts, true)
+
+    // Create a composite manager
+    val compositeManager = CompositeConfigManager(byteArrayMaxOverrideConfig, zipInputStreamZipEntrySourceConfig, zipSecureFileConfig, zipPackageSetUseTempFilePackageParts)
+
+    try compositeManager {
       // Tika will try at best effort to detect MIME-TYPE by reading some bytes in. With some formats such as .docx,
       // Tika is fooled thinking it is just another zip file. In our experience, it always works better when passing
       // a file than a stream as file name is also leveraged. So let's "fool the fool" by explicitly passing filename

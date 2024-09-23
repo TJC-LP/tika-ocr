@@ -69,7 +69,7 @@ class TikaFileFormat extends FileFormat with DataSourceRegister {
     // Optionally skip password protected documents
     val skipEncryptedFiles = getOption(options, TIKA_SKIP_ENCRYPTED_FILES, "true")(_.toBoolean)
     // Optionally output XML
-    val enableXMLOutput = getOption(options, TIKA_XML_OUTPUT, "false")(_.toBoolean)
+    val enableXMLOutput = getOption(options, TIKA_XML_OUTPUT, "true")(_.toBoolean)
 
     file: PartitionedFile => {
 
@@ -105,14 +105,17 @@ class TikaFileFormat extends FileFormat with DataSourceRegister {
         // Return a serializable row of TIKA extracted content
         Iterator.single(TikaSerializer.serialize(tikaDocument, requiredSchema))
       } catch {
+        case _: org.apache.tika.exception.EncryptedDocumentException if skipEncryptedFiles => Iterator.empty
         case e: org.apache.tika.exception.TikaException =>
           e.getCause match {
             // Skip office temp files optionally
-            case _: org.apache.poi.openxml4j.exceptions.NotOfficeXmlFileException if skipOfficeTempFiles =>
+            case _: org.apache.poi.openxml4j.exceptions.NotOfficeXmlFileException | _: org.apache.poi.ooxml.POIXMLException if skipOfficeTempFiles =>
               Iterator.empty
             case _: org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException if skipEncryptedFiles =>
               // Skip encrypted files if the skipEncryptedFiles flag is true
               Iterator.empty
+            // Skip Java issues
+            case _: java.util.zip.ZipException => Iterator.empty
             case _ => throw e // Rethrow the TikaException if it's not a skip
           }
       } finally {
